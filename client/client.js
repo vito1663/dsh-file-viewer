@@ -431,6 +431,8 @@ window.__ModuleLoader__.load({
       var inputRef = React.useRef(null);
       // 请求序号：快速连续打开时丢弃过期响应（防慢响应覆盖新结果）。
       var reqIdRef = React.useRef(0);
+      // 挂载首帧标记：首帧由 mount effect 决定展示内容，后续 store 变更才走 deps effect。
+      var mountedRef = React.useRef(false);
 
       function loadFile(absPath, myId) {
         setFile(undefined); setDir(undefined);
@@ -481,23 +483,28 @@ window.__ModuleLoader__.load({
         if (initialPath) setPath(initialPath);
       }, [initialPath]);
       // 有待打开路径（且属于本会话或未标记会话）时自动打开。
+      // 跳过挂载首帧：首帧展示内容统一由 mount effect 决定（记忆 > 待打开 > 工作区）。
       useEffect(function () {
+        if (!mountedRef.current) return;
         if (pendingOpen && initialPath && (snapshot.session === undefined || snapshot.session === sessionId)) {
           open(initialPath);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
       }, [pendingOpen, initialPath, snapshot.session]);
-      // 挂载（首次点进 tab）：无待打开路径 → 优先展示本会话上次查看的文件，
-      // 否则默认展示当前工作区目录。
-      var mountedRef = React.useRef(false);
+      // 挂载（点进 tab）时的展示优先级：
+      //   1) 本会话上次查看的文件/目录（记忆）——避免陈旧 store 路径覆盖最近查看；
+      //   2) 本会话待打开路径（芯片/文件链接刚触发，且无历史记忆）；
+      //   3) 本会话工作区目录（首次进入）。
       useEffect(function () {
         if (mountedRef.current) return;
         mountedRef.current = true;
-        if (pendingOpen && initialPath && (snapshot.session === undefined || snapshot.session === sessionId)) return;
         var last = props.store.lastOf(sessionId);
         if (typeof last === "string" && last.length > 0) {
           setPath(last);
           open(last);
+        } else if (pendingOpen && initialPath && (snapshot.session === undefined || snapshot.session === sessionId)) {
+          setPath(initialPath);
+          open(initialPath);
         } else if (typeof sessionCwd === "string" && sessionCwd.length > 0) {
           setPath(sessionCwd);
           open(sessionCwd);
