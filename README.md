@@ -37,7 +37,7 @@ Requires Node >= 22 and a dsh web profile (with `@deepseek-ai/dsh-web-app`).
 
 ```sh
 # in your dsh profile (e.g. the web profile)
-dsh plugin --profile web add github:<your-user>/dsh-file-viewer -w
+dsh plugin --profile web add github:vito1663/dsh-file-viewer -w
 ```
 
 Then install the optional Word-conversion dependency **inside the plugin directory**:

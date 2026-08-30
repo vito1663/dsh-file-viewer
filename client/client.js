@@ -156,6 +156,17 @@ window.__ModuleLoader__.load({
     var viewerStore = createStore();
     var __t = function (k) { return k; };
 
+    // 安全：markdown 链接 href 白名单（防 javascript:/data:/vbscript: 注入）。
+    function safeHref(href) {
+      var h = String(href).trim();
+      if (h === "") return undefined;
+      // 无 scheme（相对路径 / 纯锚点）放行
+      if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(h)) return h;
+      // 只允许常见安全 scheme
+      if (/^(https?|mailto):/i.test(h)) return h;
+      return undefined;
+    }
+
     function formatSize(n) {
       if (n === undefined) return "";
       if (n < 1024) return n + " B";
@@ -277,8 +288,9 @@ window.__ModuleLoader__.load({
           else if (p.startsWith("*") && p.endsWith("*") && p.length > 2) out.push(h("em", { key: j }, inline(p.slice(1, -1))));
           else if (p.startsWith("[") && p.endsWith(")")) {
             var linkMatch = /^\[([^\]]+)\]\(([^)]+)\)/.exec(p);
-            if (linkMatch) out.push(h("a", { key: j, href: linkMatch[2], target: "_blank", rel: "noreferrer", style: S.link }, linkMatch[1]));
-            else out.push(p);
+            var safe = linkMatch ? safeHref(linkMatch[2]) : undefined;
+            if (linkMatch && safe !== undefined) out.push(h("a", { key: j, href: safe, target: "_blank", rel: "noreferrer", style: S.link }, linkMatch[1]));
+            else out.push(linkMatch ? linkMatch[0] : p);
           } else out.push(p);
         }
         return out;
