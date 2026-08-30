@@ -4,19 +4,17 @@
 
 **In one sentence: browse and view the files and directories on the machine where dsh runs, right from the dsh web UI.**
 
-## Who is this for?
+## The two problems it solves
 
-**Mainly for people running dsh on a remote server.**
+**Problem 1: you can't see the server's files.**
+dsh runs on the server, but the web UI gives you no way to view the server's files directly — to see a file's content you'd have to SSH in.
 
-Picture this:
+**Problem 2: when you use dsh remotely, clicking a file path looks on *your* device.**
+dsh lives on the server (or a remote machine), but you're operating from another device. When you click a file path in the conversation, dsh assumes the file exists on **the device you're currently using** and looks there — your device doesn't have the server's files, so it always fails with "not found".
 
-- Your dsh runs on a Linux server with **no desktop and no browser** (normal for a server).
-- You want to see what a file on that server looks like — before, you'd have to SSH in and `cat` it, or click "open" in dsh and nothing happens, because there's no graphical environment on the server.
-- After installing this plugin: open dsh in **your own browser** (computer or phone) → click the **Files** tab → type a path or click through directories → the file renders right in the page.
+With this plugin: open dsh in your own browser, click the **Files** tab, type a path or browse directories — the server's files render right in the page, no matter which device you're on.
 
-You can look from anywhere: your office computer, your phone on a trip, an iPad at home. As long as you can log into dsh, you can see the server's files and directories. **No shared folders, no remote desktop, no browser installed on the server.**
-
-> Installed on dsh running on your **own computer** instead? It works exactly the same — you just browse that computer's files.
+> Installed on dsh running on your own computer instead? It works the same — you just view that computer's files.
 
 ## What it does
 
