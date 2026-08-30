@@ -93,6 +93,7 @@ window.__ModuleLoader__.load({
       tooLarge: "文件过大或无法读取",
       failed: "加载失败：",
       empty: "没有可显示的内容",
+      binary: "二进制文件，无法预览",
       size: "大小",
       type: "类型",
       bytes: "字节",
@@ -114,6 +115,7 @@ window.__ModuleLoader__.load({
       tooLarge: "File too large or unreadable",
       failed: "Failed to load: ",
       empty: "Nothing to display",
+      binary: "Binary file, cannot preview",
       size: "Size",
       type: "Type",
       bytes: "bytes",
@@ -320,6 +322,9 @@ window.__ModuleLoader__.load({
       }
       if (file.kind === "pdf") {
         return h("iframe", { style: S.iframeFill, src: file.dataUrl, title: file.name });
+      }
+      if (file.kind === "binary") {
+        return h("p", { style: S.meta }, t("binary") + " · " + formatSize(file.size));
       }
       if (file.kind === "markdown") return renderMarkdown(file.text);
       if (file.kind === "json") {

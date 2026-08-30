@@ -168,6 +168,15 @@ test('viewer.load: relative path resolved against cwd', async () => {
   assert.equal(r.value.path, '/srv/project/data.json');
 });
 
+test('viewer.load: binary content (NUL bytes) → kind binary', async () => {
+  const handler = createHandler(makeFs({
+    '/srv/bin.dat': { type: 'file', bytes: new Uint8Array([0x00, 0x01, 0x02, 0xff]) },
+  }));
+  const r = await call(handler, ENDPOINTS.load, { path: '/srv/bin.dat' });
+  assert.equal(r.ok, true);
+  assert.equal(r.value.kind, 'binary');
+});
+
 test('viewer.load: non-regular file (dir/fifo) → explicit error', async () => {
   const handler = createHandler(makeFs({
     '/srv/fifo': { type: 'other', size: 0 },
