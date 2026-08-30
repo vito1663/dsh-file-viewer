@@ -1,3 +1,5 @@
+**English** | [简体中文](README.zh-CN.md)
+
 # dsh-file-viewer
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plugin that adds a **server file browser + viewer** inside the dsh web UI.
@@ -8,7 +10,7 @@ Enter a server path — if it is a **file**, the plugin auto-detects the type an
 
 dsh's built-in workspace file browser opens files via `xdg-open` on the machine running dsh. On a headless / containerised server this always fails (no desktop, no browser), and even when a browser exists it opens a **server-local** window you cannot see from your own device.
 
-This plugin routes around that: a dedicated **"文件查看 / Files" tab** in the conversation area reads the file content on the server and renders it in your browser.
+This plugin routes around that: a dedicated **"文件 / Files" tab** in the conversation area reads the file content on the server and renders it in your browser.
 
 ## Features
 
@@ -54,7 +56,7 @@ Restart dsh web afterwards (`sudo systemctl restart dsh-web` if managed by syste
 ## Usage
 
 1. Open any session in dsh web.
-2. Click the **文件查看 / Files** tab (next to 对话 / Trajectory).
+2. Click the **文件 / Files** tab (next to 对话 / Trajectory).
 3. Enter an absolute server path and press Enter or click 打开 / Open:
    - a **directory** → its contents are listed (folders first); click to navigate or open;
    - a **file** → it is auto-detected and rendered.
