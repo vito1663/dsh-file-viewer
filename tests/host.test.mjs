@@ -54,6 +54,8 @@ test('isDeniedEntryName: hides credential-bearing entries', () => {
   assert.equal(isDeniedEntryName('.bash_history'), true);
   assert.equal(isDeniedEntryName('settings.yaml'), true);
   assert.equal(isDeniedEntryName('server.key'), true);
+  assert.equal(isDeniedEntryName('etc'), true);
+  assert.equal(isDeniedEntryName('proc'), true);
   assert.equal(isDeniedEntryName('report.md'), false);
   assert.equal(isDeniedEntryName('README.md'), false);
 });
@@ -164,6 +166,19 @@ test('viewer.load: relative path resolved against cwd', async () => {
   const r = await call(handler, ENDPOINTS.load, { path: 'data.json', cwd: '/srv/project' });
   assert.equal(r.ok, true);
   assert.equal(r.value.path, '/srv/project/data.json');
+});
+
+test('viewer.load: non-regular file (dir/fifo) → explicit error', async () => {
+  const handler = createHandler(makeFs({
+    '/srv/fifo': { type: 'other', size: 0 },
+    '/srv/dir': { type: 'directory' },
+  }));
+  const r1 = await call(handler, ENDPOINTS.load, { path: '/srv/fifo' });
+  assert.equal(r1.ok, false);
+  assert.match(r1.error.message, /不是普通文件/);
+  const r2 = await call(handler, ENDPOINTS.load, { path: '/srv/dir' });
+  assert.equal(r2.ok, false);
+  assert.match(r2.error.message, /不是普通文件/);
 });
 
 test('viewer.load: empty payload path → error', async () => {

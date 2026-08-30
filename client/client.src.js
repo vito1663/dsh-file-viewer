@@ -192,7 +192,8 @@ window.__ModuleLoader__.load({
       }
       function isTableSeparator(line) {
         var t = String(line).trim();
-        return /^\|?[\s:|-]+\|?$/.test(t) && /-/.test(t);
+        // GFM 表格分隔行必须含 |（纯 --- 是 setext 标题，不是表格）
+        return t.indexOf("|") !== -1 && /^[\s:|-]+$/.test(t) && /-/.test(t);
       }
       function renderTable(lines, start) {
         var rows = [];
@@ -377,11 +378,19 @@ window.__ModuleLoader__.load({
     function ProducedFilesTail(props) {
       var paths = props.matched || [];
       if (!Array.isArray(paths) || paths.length === 0) return null;
+      var sess = typeof props.useSession === "function" ? props.useSession() : undefined;
+      var sessionId = sess && typeof sess.sessionId === "string" ? sess.sessionId : undefined;
+      var cwd;
+      if (typeof props.useSessions === "function" && sessionId !== undefined) {
+        cwd = props.useSessions(function (st) {
+          return st && typeof st.byId === "object" && st.byId[sessionId] ? st.byId[sessionId].cwd : undefined;
+        });
+      }
       var openPath = function (p) {
         if (typeof props.openFile === "function") {
           props.openFile(p);
         } else {
-          viewerStore.open(p, undefined);
+          viewerStore.open(p, typeof cwd === "string" ? cwd : undefined);
         }
       };
       return h("div", { style: S.tailList },
@@ -415,23 +424,32 @@ window.__ModuleLoader__.load({
       var busyState = useState(false);
       var busy = busyState[0], setBusy = busyState[1];
       var inputRef = React.useRef(null);
+      // 请求序号：快速连续打开时丢弃过期响应（防慢响应覆盖新结果）。
+      var reqIdRef = React.useRef(0);
 
-      function loadFile(absPath) {
+      function loadFile(absPath, myId) {
         setFile(undefined); setDir(undefined);
-        props.rpcCall(ENDPOINTS.load, { path: absPath }).then(function (result) {
+        return props.rpcCall(ENDPOINTS.load, { path: absPath }).then(function (result) {
+          if (myId !== undefined && reqIdRef.current !== myId) return;
           if (!result.ok) { setError(t("failed") + result.error.message); return; }
           setFile(result.value);
-        }, function (e) { setError(t("failed") + (e && e.message ? e.message : String(e))); });
+        }, function (e) {
+          if (myId !== undefined && reqIdRef.current !== myId) return;
+          setError(t("failed") + (e && e.message ? e.message : String(e)));
+        });
       }
 
-      // v7.4: 统一打开：viewer.list 判断目录/文件。
+      // 统一打开：viewer.list 判断目录/文件。
       function open(target) {
         var tgt = (target !== undefined ? target : (inputRef.current ? String(inputRef.current.value || "").trim() : path.trim()));
         if (!tgt) return;
+        var myId = ++reqIdRef.current;
         setBusy(true); setError(undefined);
         var reqPayload = { path: tgt };
         if (typeof cwd === "string" && cwd.length > 0) reqPayload.cwd = cwd;
+        var settle = function () { if (reqIdRef.current === myId) setBusy(false); };
         props.rpcCall(ENDPOINTS.list, reqPayload).then(function (result) {
+          if (reqIdRef.current !== myId) return;
           if (!result.ok) { setError(t("failed") + result.error.message); return; }
           var v = result.value;
           if (v.kind === "dir") {
@@ -439,12 +457,14 @@ window.__ModuleLoader__.load({
             setFile(undefined);
             setPath(v.path);
           } else {
-            // 文件 → 走 load 渲染
-            loadFile(v.path || tgt);
+            // 文件 → 走 load 渲染（loadFile 的 promise 并入 busy 状态）
             setPath(v.path || tgt);
+            return loadFile(v.path || tgt, myId);
           }
-        }, function (e) { setError(t("failed") + (e && e.message ? e.message : String(e))); })
-          .then(function () { setBusy(false); }, function () { setBusy(false); });
+        }, function (e) {
+          if (reqIdRef.current !== myId) return;
+          setError(t("failed") + (e && e.message ? e.message : String(e)));
+        }).then(settle, settle);
       }
 
       // 同步输入框：store 传入的待打开路径变化时更新。

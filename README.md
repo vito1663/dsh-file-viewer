@@ -63,7 +63,7 @@ Restart dsh web afterwards (`sudo systemctl restart dsh-web` if managed by syste
 ## Security
 
 - **Read-only**: never writes files, never executes anything.
-- **Size limits**: text ≤ 8 MB; binary (images/PDF) ≤ 6 MB; Word documents ≤ 30 MB.
+- **Size limits**: files (text, images, PDF) ≤ 6 MB; Word documents ≤ 30 MB.
 - **Denied paths**: `/etc`, `/proc`, `/sys`, `/dev` and path segments like `.ssh`, `.git`, `.dsh`, `settings.yaml`, `.credentials*`, `.env`, `.npmrc`, `.bash_history` etc. are rejected for both reading and listing (credential-bearing dotfiles are hidden from directory listings).
 - **Denied extensions**: `.pem`, `.key`, `.p12`, `.pfx`, `.crt`, `.cer`, `.p8`, `.env`, `.keystore`.
 - **Channel fence**: the RPC channel is registered with `authority: 'trusted-host'`, which is a DNS-rebinding guard, **not** an authentication layer — put real authentication (access password, reverse-proxy / gateway auth) in front of your dsh deployment.
