@@ -1,0 +1,63 @@
+{
+  "name": "dsh-file-viewer",
+  "version": "0.2.0",
+  "description": "Server file browser + viewer for dsh web: enter a file path to auto-render it (HTML/PDF/Word/Markdown/images/JSON/CSV/text), or a directory path to browse and navigate its contents. Content is read from the server, viewable from any device.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": "./client/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client",
+    "scripts",
+    "tests",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "build:client": "node scripts/build-client.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "dependencies": {
+    "mammoth": "^1.12.2"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "file",
+    "viewer",
+    "browser",
+    "render",
+    "markdown",
+    "pdf",
+    "word",
+    "docx"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
+    }
+  }
+}

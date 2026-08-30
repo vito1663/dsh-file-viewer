@@ -1,0 +1,5 @@
+# dsh-file-viewer bundle patch（dsh.bundle manifest 要求的加载配置）
+# 装一次，dsh web 会话区多出「文件查看」标签页（目录/文件浏览器 + 渲染）。
+- insert:
+    - id: dsh-file-viewer
+      name: dsh-file-viewer
