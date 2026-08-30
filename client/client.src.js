@@ -79,8 +79,7 @@ window.__ModuleLoader__.load({
     };
 
     var zh = {
-      action: "文件查看器",
-      view: "文件查看",
+      view: "文件",
       title: "文件查看",
       placeholder: "输入服务器上的文件或目录路径，例如 /path/to/file.md",
       load: "打开",
@@ -96,7 +95,6 @@ window.__ModuleLoader__.load({
       produced: "产物：",
     };
     var en = {
-      action: "File viewer",
       view: "Files",
       title: "File viewer",
       placeholder: "Absolute file or directory path, e.g. /path/to/file.md",
@@ -131,16 +129,20 @@ window.__ModuleLoader__.load({
         .then(function (r) { clearTimeout(timer); return r; }, function (e) { clearTimeout(timer); throw e; });
     }
 
-    // 一个极简可订阅 store：给入口与「文件查看」视图共享「待打开路径」状态。
+    // 一个极简可订阅 store：给入口与「文件查看」视图共享「待打开路径」状态，
+    // 并记录每个会话"上次查看"的路径（首次进入 tab 时展示）。
     function createStore() {
-      var snapshot = { open: false, path: "", cwd: undefined };
+      var snapshot = { open: false, path: "", cwd: undefined, session: undefined };
+      var lastBySession = {};
       var listeners = new Set();
-      function emit() { var s = { open: snapshot.open, path: snapshot.path, cwd: snapshot.cwd }; listeners.forEach(function (fn) { fn(s); }); }
+      function emit() { var s = { open: snapshot.open, path: snapshot.path, cwd: snapshot.cwd, session: snapshot.session }; listeners.forEach(function (fn) { fn(s); }); }
       return {
         getSnapshot: function () { return snapshot; },
         subscribe: function (fn) { listeners.add(fn); return function () { listeners.delete(fn); }; },
-        open: function (path, cwd) { snapshot = { open: true, path: typeof path === "string" ? path : "", cwd: typeof cwd === "string" ? cwd : undefined }; emit(); },
-        setPath: function (path) { snapshot = { open: snapshot.open, path: path, cwd: snapshot.cwd }; emit(); },
+        open: function (path, cwd, session) { snapshot = { open: true, path: typeof path === "string" ? path : "", cwd: typeof cwd === "string" ? cwd : undefined, session: typeof session === "string" ? session : undefined }; emit(); },
+        setPath: function (path) { snapshot = { open: snapshot.open, path: path, cwd: snapshot.cwd, session: snapshot.session }; emit(); },
+        remember: function (session, path) { if (typeof session === "string" && session.length > 0 && typeof path === "string" && path.length > 0) lastBySession[session] = path; },
+        lastOf: function (session) { return typeof session === "string" && session.length > 0 ? lastBySession[session] : undefined; },
       };
     }
 
@@ -385,7 +387,7 @@ window.__ModuleLoader__.load({
         if (typeof props.openFile === "function") {
           props.openFile(p);
         } else {
-          viewerStore.open(p, typeof cwd === "string" ? cwd : undefined);
+          viewerStore.open(p, typeof cwd === "string" ? cwd : undefined, sessionId);
         }
       };
       return h("div", { style: S.tailList },
@@ -404,10 +406,18 @@ window.__ModuleLoader__.load({
     // 「文件查看」标签页视图：目录浏览器 + 文件渲染。
     function FileViewerView(props) {
       var t = props.t;
+      var sessionId = typeof props.sessionId === "string" ? props.sessionId : undefined;
       var snapshot = useSyncExternalStore(props.store.subscribe, props.store.getSnapshot);
       var pendingOpen = snapshot.open;
       var initialPath = snapshot.path || "";
       var cwd = snapshot.cwd;
+      // 会话级 cwd（首次进入 tab 时默认展示工作区目录）
+      var sessionCwd;
+      if (typeof props.useSessions === "function" && sessionId !== undefined) {
+        sessionCwd = props.useSessions(function (st) {
+          return st && typeof st.byId === "object" && st.byId[sessionId] ? st.byId[sessionId].cwd : undefined;
+        });
+      }
       var pathState = useState(initialPath);
       var path = pathState[0], setPath = pathState[1];
       var dirState = useState(undefined);
@@ -428,6 +438,8 @@ window.__ModuleLoader__.load({
           if (myId !== undefined && reqIdRef.current !== myId) return;
           if (!result.ok) { setError(t("failed") + result.error.message); return; }
           setFile(result.value);
+          // 记录本会话上次查看的文件
+          props.store.remember(sessionId, absPath);
         }, function (e) {
           if (myId !== undefined && reqIdRef.current !== myId) return;
           setError(t("failed") + (e && e.message ? e.message : String(e)));
@@ -451,6 +463,8 @@ window.__ModuleLoader__.load({
             setDir(v);
             setFile(undefined);
             setPath(v.path);
+            // 记录本会话上次查看的目录
+            props.store.remember(sessionId, v.path);
           } else {
             // 文件 → 走 load 渲染（loadFile 的 promise 并入 busy 状态）
             setPath(v.path || tgt);
@@ -466,11 +480,30 @@ window.__ModuleLoader__.load({
       useEffect(function () {
         if (initialPath) setPath(initialPath);
       }, [initialPath]);
-      // 有待打开路径时自动打开（挂载 / 新路径 / 从其它 tab 切回都会触发）。
+      // 有待打开路径（且属于本会话或未标记会话）时自动打开。
       useEffect(function () {
-        if (pendingOpen && initialPath) open(initialPath);
+        if (pendingOpen && initialPath && (snapshot.session === undefined || snapshot.session === sessionId)) {
+          open(initialPath);
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-      }, [pendingOpen, initialPath]);
+      }, [pendingOpen, initialPath, snapshot.session]);
+      // 挂载（首次点进 tab）：无待打开路径 → 优先展示本会话上次查看的文件，
+      // 否则默认展示当前工作区目录。
+      var mountedRef = React.useRef(false);
+      useEffect(function () {
+        if (mountedRef.current) return;
+        mountedRef.current = true;
+        if (pendingOpen && initialPath && (snapshot.session === undefined || snapshot.session === sessionId)) return;
+        var last = props.store.lastOf(sessionId);
+        if (typeof last === "string" && last.length > 0) {
+          setPath(last);
+          open(last);
+        } else if (typeof sessionCwd === "string" && sessionCwd.length > 0) {
+          setPath(sessionCwd);
+          open(sessionCwd);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []);
 
       var fileParent = file && file.path ? (String(file.path).slice(0, String(file.path).lastIndexOf("/")) || "/") : undefined;
 
@@ -556,8 +589,8 @@ window.__ModuleLoader__.load({
       // 官方对话 UI 的 openFile（产物芯片 / 消息内文件路径）在无头服务器上走
       // xdg-open 必败；暴露全局钩子，让官方 UI 把它路由进本查看器并切换标签页。
       if (typeof window !== "undefined") {
-        window.__dshFileViewerOpen = function (path) {
-          viewerStore.open(typeof path === "string" ? path : "", undefined);
+        window.__dshFileViewerOpen = function (path, session) {
+          viewerStore.open(typeof path === "string" ? path : "", undefined, typeof session === "string" ? session : undefined);
         };
       }
     }
