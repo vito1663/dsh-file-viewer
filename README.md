@@ -2,93 +2,101 @@
 
 # dsh-file-viewer
 
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plugin that adds a **server file browser + viewer** inside the dsh web UI.
+**In one sentence: browse and view the files and directories on the machine where dsh runs, right from the dsh web UI.**
 
-Enter a server path — if it is a **file**, the plugin auto-detects the type and renders it in the browser; if it is a **directory**, it shows the directory's subdirectories and files, letting you navigate into subdirectories and open files directly. Content is loaded **from the server** over the plugin's own RPC channel, so any device that can log into dsh can view files — no shared folders, no loopback, no desktop required.
+## Who is this for?
 
-## Why
+**Mainly for people running dsh on a remote server.**
 
-dsh's built-in workspace file browser opens files via `xdg-open` on the machine running dsh. On a headless / containerised server this always fails (no desktop, no browser), and even when a browser exists it opens a **server-local** window you cannot see from your own device.
+Picture this:
 
-This plugin routes around that: a dedicated **"文件 / Files" tab** in the conversation area reads the file content on the server and renders it in your browser.
+- Your dsh runs on a Linux server with **no desktop and no browser** (normal for a server).
+- You want to see what a file on that server looks like — before, you'd have to SSH in and `cat` it, or click "open" in dsh and nothing happens, because there's no graphical environment on the server.
+- After installing this plugin: open dsh in **your own browser** (computer or phone) → click the **Files** tab → type a path or click through directories → the file renders right in the page.
 
-## Features
+You can look from anywhere: your office computer, your phone on a trip, an iPad at home. As long as you can log into dsh, you can see the server's files and directories. **No shared folders, no remote desktop, no browser installed on the server.**
 
-- **Directory browser**: enter any directory path → breadcrumb + sorted list of subdirectories (first) and files (with sizes); click a subdirectory to enter it, click a file to open it. Supports "up one level" and breadcrumb jumps.
-- **Auto-detect + render**:
+> Installed on dsh running on your **own computer** instead? It works exactly the same — you just browse that computer's files.
 
-  | Type | Detection | Rendering |
-  |---|---|---|
-  | HTML / HTM / XHTML | extension + content | sandboxed `<iframe>` (`srcDoc`, scripts disabled) |
-  | PNG / JPEG / GIF / WEBP | extension + **magic bytes** | `<img>` (base64) |
-  | SVG | extension | sandboxed iframe |
-  | PDF | magic bytes | iframe (base64) + "open in new tab" fallback |
-  | Markdown | extension | headings / lists / tables / quotes / fenced code / inline styles |
-  | JSON | extension | pretty-printed `<pre>` |
-  | CSV / TSV | extension | table |
-  | Word `.docx` | ZIP magic + extension | converted to HTML on the host via [mammoth](https://github.com/mammoth/mammoth.js) |
-  | Word `.doc` | extension | converted to text on the host via `antiword` |
-  | Any text / code / log | fallback | monospace `<pre>` |
+## What it does
 
-  Magic bytes take precedence over extensions (forged extensions are not trusted).
-- **Conversation integration**: clicking a produced-file chip or a file path in the conversation switches to the Files tab and opens it (on headless hosts, via an optional compatibility patch — see below).
+- **Browse directories**: enter a directory path (e.g. `/srv/share`) and get an instant list of subdirectories and files; click a subdirectory to enter it, click a file to open it. Supports "up one level" and breadcrumb jumps.
+- **Open files**: enter a file path and the plugin auto-detects the type and renders it. Formats it understands:
+
+| Format | Rendering |
+|---|---|
+| Markdown | headings / lists / tables / quotes / code blocks / inline styles |
+| HTML / SVG | sandboxed iframe (scripts disabled, safe) |
+| Images (PNG/JPG/GIF/WebP) | displayed directly |
+| PDF | embedded viewer, plus "open in new tab" |
+| Word (.docx) | converted to a web page (headings, tables, images intact) |
+| Word (.doc legacy) | converted to plain text |
+| JSON | pretty-printed |
+| CSV / TSV | as a table |
+| Any text / code / log | monospace display |
+
+> Detection uses file content "magic bytes" first — a fake extension won't fool it.
+
+- **Conversation integration**: click a produced-file chip or a file path in the conversation to jump straight to the Files tab (needs a small compatibility patch on headless servers — see below).
 
 ## Installation
 
-Requires Node >= 22 and a dsh web profile (with `@deepseek-ai/dsh-web-app`).
+Requires Node >= 22 and an existing dsh web setup.
 
 ```sh
 # in your dsh profile (e.g. the web profile)
 dsh plugin --profile web add github:vito1663/dsh-file-viewer -w
 ```
 
-Then install the optional Word-conversion dependency **inside the plugin directory**:
+Then install one optional dependency **inside the plugin directory** (turns Word into web pages):
 
 ```sh
-cd <plugin dir>      # e.g. ~/.dsh/local-plugins/dsh-file-viewer
-npm install mammoth  # for .docx → HTML
+cd <plugin dir>      # usually ~/.dsh/local-plugins/dsh-file-viewer
+npm install mammoth
 ```
 
-`.doc` (legacy Word) additionally needs `antiword` on the host (Debian/Ubuntu: `apt install antiword`; it ships with a UTF-8 mapping for CJK documents). Both are optional — without them, Word files report a clear error and everything else still works.
+- For legacy `.doc` files, also install `antiword` on the server: `apt install antiword` (Debian/Ubuntu).
+- Both are **optional**: without them, opening Word files shows a clear error and everything else still works.
 
-Restart dsh web afterwards (`sudo systemctl restart dsh-web` if managed by systemd).
+Finally restart dsh web (`sudo systemctl restart dsh-web` if managed by systemd).
 
 ## Usage
 
-1. Open any session in dsh web.
-2. Click the **文件 / Files** tab (next to 对话 / Trajectory).
-3. Enter an absolute server path and press Enter or click 打开 / Open:
-   - a **directory** → its contents are listed (folders first); click to navigate or open;
-   - a **file** → it is auto-detected and rendered.
-4. Clicking produced-file chips or file paths in the conversation auto-switches to this tab (with the compatibility patch, see below).
+1. Open dsh web and enter any session.
+2. Click the **Files** tab at the top (next to Chat and Trajectory).
+3. Enter an absolute server path and press Enter or click Open:
+   - a **directory** → its contents are listed; click your way down;
+   - a **file** → auto-rendered.
+
+The first time you open the Files tab it defaults to the current workspace directory; files you viewed are remembered, so switching back shows them again.
 
 ## Security
 
-- **Read-only**: never writes files, never executes anything.
-- **Size limits**: files (text, images, PDF) ≤ 6 MB; Word documents ≤ 30 MB.
-- **Denied paths**: `/etc`, `/proc`, `/sys`, `/dev` and path segments like `.ssh`, `.git`, `.dsh`, `settings.yaml`, `.credentials*`, `.env`, `.npmrc`, `.bash_history` etc. are rejected for both reading and listing (credential-bearing dotfiles are hidden from directory listings).
-- **Denied extensions**: `.pem`, `.key`, `.p12`, `.pfx`, `.crt`, `.cer`, `.p8`, `.env`, `.keystore`.
-- **Channel fence**: the RPC channel is registered with `authority: 'trusted-host'`, which is a DNS-rebinding guard, **not** an authentication layer — put real authentication (access password, reverse-proxy / gateway auth) in front of your dsh deployment.
+- **Read-only**: it never writes files and never executes anything.
+- **Size limits**: regular files ≤ 6 MB, Word ≤ 30 MB.
+- **Sensitive paths rejected**: `/etc`, `/proc`, `.ssh`, `.git`, `settings.yaml`, `.env`, `.npmrc`, etc. are not viewable and are hidden from directory listings.
+- **Important**: the plugin channel only guards against DNS rebinding — it is **not** login authentication. Make sure your dsh deployment has its own auth (access password / reverse-proxy auth) before exposing it to the internet.
 
-## Compatibility patch (headless servers)
+## Compatibility patch for headless servers (recommended)
 
-On headless hosts, dsh's core conversation "open file" action (`openFile`) still goes through `host.openPath` → `xdg-open`, which fails. This repo ships an idempotent helper that routes that core action into the plugin:
+On headless servers, dsh's built-in "open file in conversation" action goes through `xdg-open` and fails. This repo ships a tiny script that reroutes it to the Files tab:
 
 ```sh
 node scripts/patch-conversation-openfile.mjs
 ```
 
-It patches `dsh-client-ui-conversation/lib/client.js` so `openFile` calls the plugin's global hook (`window.__dshFileViewerOpen`) and switches to the Files tab, falling back to the original behavior when the plugin is absent. **dsh upgrades overwrite node_modules, so re-run the script after upgrading dsh.** Patch without the plugin is inert.
+- Idempotent: re-running is harmless; re-run after dsh upgrades overwrite the patched file.
+- Inert when the plugin isn't installed — safe to leave in place.
 
 ## Development
 
 ```sh
-npm install          # installs mammoth (runtime) 
-node scripts/build-client.mjs   # copy client/client.src.js → client/client.js
-npm test             # host-side contract tests (node:test)
+npm install                          # installs mammoth
+node scripts/build-client.mjs        # client/client.src.js → client/client.js
+npm test                             # host-side contract tests
 ```
 
-`client/client.js` is generated from `client/client.src.js` — edit the source, then rebuild. The client is a `__ModuleLoader__` classic script (no JSX/TS/imports).
+`client/client.js` is generated from `client/client.src.js` — edit the source, then rebuild.
 
 ## License
 
