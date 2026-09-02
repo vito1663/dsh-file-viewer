@@ -27,6 +27,13 @@ let badges;
 let flush;
 let clickEl;
 let openPathInViewer;
+// 固定的修改时间（2026-03-05 06:07 UTC，本地渲染随测试机时区，断言用同一函数口径）
+const MTIME = Date.UTC(2026, 2, 5, 6, 7, 0);
+const MTIME_TEXT = (() => {
+  const d = new Date(MTIME);
+  const p = (x) => (x < 10 ? '0' : '') + x;
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+})();
 
 before(async () => {
   let React;
@@ -89,9 +96,9 @@ before(async () => {
         return Promise.resolve({ ok: true, value: {
           kind: 'dir', path: DIR, truncated: false,
           entries: [
-            { name: 'sub', kind: 'dir', path: DIR + '/sub' },
-            { name: 'note.txt', kind: 'file', path: FILE, size: fileBytes.length },
-            { name: 'huge.bin', kind: 'file', path: DIR + '/huge.bin', size: 70 * 1024 * 1024 },
+            { name: 'sub', kind: 'dir', path: DIR + '/sub', mtime: MTIME },
+            { name: 'note.txt', kind: 'file', path: FILE, size: fileBytes.length, mtime: MTIME },
+            { name: 'huge.bin', kind: 'file', path: DIR + '/huge.bin', size: 70 * 1024 * 1024, mtime: MTIME },
           ],
         } });
       }
@@ -157,6 +164,10 @@ test('client: dir list renders a download badge after each file entry (not dirs)
   assert.equal(badges().length, 2, '徽章数应等于文件数，实际 titles=' + JSON.stringify(titles));
   assert.ok(titles.some((x) => (x || '').includes('note.txt')));
   assert.ok(titles.some((x) => (x || '').includes('huge.bin')));
+  // 文件和目录行都显示修改时间（YYYY-MM-DD HH:mm）
+  const timeCells = Array.from(container.querySelectorAll('span')).filter((el) => el.textContent === MTIME_TEXT);
+  assert.ok(timeCells.length >= 3, '三个条目行都应显示修改时间 ' + MTIME_TEXT + '，实际=' + container.textContent.slice(0, 160));
+  assert.ok(container.textContent.includes(MTIME_TEXT), '列表应包含格式化后的修改时间');
 });
 
 test('client: clicking the badge downloads the file without opening it', async (t) => {

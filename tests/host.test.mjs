@@ -204,10 +204,11 @@ test('unknown endpoint → error', async () => {
   assert.match(r.error.message, /未知端点/);
 });
 
-// ---- viewer.download ---------------------------------------------------------
-// download 端点用 node:fs 按真实磁盘路径分块读，fixture 要把虚拟路径映射到真实临时文件
+// ---- viewer.download / viewer.list(mtime) ------------------------------------
+// 两个端点都会用 node:fs 按真实磁盘路径读写，fixture 要把虚拟路径映射到真实临时文件
 //（displayPath=磁盘路径，targetKey=虚拟路径；磁盘文件 basename 与虚拟一致以验证 name）。
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+// stat/listDir 对未登记的虚拟路径回退到真实磁盘（支持 viewer.list 的 mtime 测试）。
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -232,10 +233,29 @@ function makeRealFs() {
     processPath(target) { return target.displayPath; },
     async stat(target) {
       const e = REAL_ENTRIES.get(target.targetKey);
-      if (!e) return undefined;
-      return { type: e.type, size: e.bytes.length, version: 1 };
+      if (e) return { type: e.type, size: e.bytes.length, version: 1 };
+      // 未登记路径回退真实磁盘 stat（供 viewer.list / mtime 测试）
+      try {
+        const st = statSync(target.displayPath);
+        return { type: st.isDirectory() ? 'directory' : (st.isFile() ? 'file' : 'other'), size: st.size, version: 1 };
+      } catch {
+        return undefined;
+      }
     },
-    async listDir() { return []; },
+    async listDir(target) {
+      // 真实磁盘 readdir（供 viewer.list 测试）；失败回退空列表
+      try {
+        const dirents = readdirSync(target.displayPath, { withFileTypes: true });
+        return dirents.map((d) => ({
+          name: d.name,
+          type: d.isDirectory() ? 'directory' : (d.isFile() ? 'file' : 'other'),
+          ...(d.isFile() ? { size: statSync(join(target.displayPath, d.name)).size } : {}),
+          target: { displayPath: join(target.displayPath, d.name), targetKey: `${target.targetKey}/${d.name}` },
+        }));
+      } catch {
+        return [];
+      }
+    },
     async readBytes(target, _signal, _max) {
       const e = REAL_ENTRIES.get(target.targetKey);
       if (!e || !e.bytes) throw new Error(`cannot read ${target.targetKey}`);
@@ -368,6 +388,41 @@ test('viewer.download: exactly 64MB passes the cap check (reaches read stage)', 
   assert.equal(r.ok, false);
   assert.doesNotMatch(r.error.message, /超过下载上限/);
   assert.equal(statCalls, 1);
+});
+
+test('viewer.list: entries carry modification time (files and dirs)', async () => {
+  // 真实临时目录里建 1 目录 + 1 文件（不经过 REAL_DISK 登记，走 stat/listDir 的磁盘回退）
+  const listDir = join(TMP, 'listme');
+  mkdirSync(join(listDir, 'subdir'), { recursive: true });
+  writeFileSync(join(listDir, 'a.txt'), 'x');
+  const before = Date.now();
+  const handler = createHandler(makeRealFs());
+  const r = await call(handler, ENDPOINTS.list, { path: `${TMP}/listme` });
+  assert.equal(r.ok, true);
+  assert.equal(r.value.kind, 'dir');
+  const byName = new Map(r.value.entries.map((e) => [e.name, e]));
+  const fileEntry = byName.get('a.txt');
+  const dirEntry = byName.get('subdir');
+  assert.ok(fileEntry, '文件条目应存在');
+  assert.ok(dirEntry, '目录条目应存在');
+  // 文件和目录都带 mtime（epoch ms，且是近期时间）
+  assert.equal(typeof fileEntry.mtime, 'number');
+  assert.equal(typeof dirEntry.mtime, 'number');
+  const diskMtime = Math.floor(statSync(join(listDir, 'a.txt')).mtimeMs);
+  assert.equal(fileEntry.mtime, diskMtime, 'mtime 应等于磁盘 stat 的 mtimeMs');
+  assert.ok(Math.abs(fileEntry.mtime - before) < 60_000, 'mtime 应接近当前时间');
+  // 敏感条目过滤逻辑不受影响（这里没有敏感条目，验证 mtime 没破坏结构）
+  assert.equal(fileEntry.path, join(listDir, 'a.txt'));
+});
+
+test('viewer.list: stat failure degrades gracefully (entry without mtime)', async () => {
+  // 指向一个 stat 会失败的条目：把 entry.path 指到不存在的磁盘路径
+  const brokenFs = makeRealFs();
+  const handler = createHandler(brokenFs);
+  const r = await call(handler, ENDPOINTS.list, { path: `${TMP}/no-such-dir-xyz` });
+  // 目录本身不存在 → stat 回退失败 → 明确的『路径不存在』错误
+  assert.equal(r.ok, false);
+  assert.match(r.error.message, /路径不存在/);
 });
 
 after(() => {

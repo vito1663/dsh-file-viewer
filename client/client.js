@@ -9,7 +9,7 @@
 // Markdown(增强渲染，含表格)、JSON(美化)、CSV/TSV(表格)、PDF(iframe+新窗口)、
 // Word(docx/doc 宿主端转 HTML)、文本/代码。
 //
-// 目录浏览：viewer.list 端点 —— 输入目录 → 面包屑 + 子目录/文件列表；
+// 目录浏览：viewer.list 端点 —— 输入目录 → 面包屑 + 子目录/文件列表（含修改时间、大小）；
 // 点子目录进入，点文件加载渲染，支持「上一级」与面包屑跳转；文件视图带「所在目录」返回。
 //
 // 下载（v7.5）：文件列表每行尾部有「⬇」下载徽章，文件视图 meta 栏有「⬇ 下载」按钮；
@@ -69,6 +69,7 @@ window.__ModuleLoader__.load({
       entryRow: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "7px 10px", borderRadius: 6, fontSize: 13.5, color: "var(--dsw-alias-label-primary, #222)" },
       entryName: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
       entrySize: { fontSize: 12, color: "var(--dsw-alias-label-tertiary, #888)", flex: "none" },
+      entryTime: { fontSize: 12, color: "var(--dsw-alias-label-tertiary, #888)", flex: "none", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" },
       // v7.5: 下载徽章（列表行尾 + 文件视图 meta 栏共用）
       dlBadge: { flex: "none", cursor: "pointer", fontSize: 12, lineHeight: 1, padding: "4px 9px", borderRadius: 10, border: "1px solid var(--dsw-alias-border-l2, #ddd)", background: "transparent", color: "var(--dsw-alias-label-secondary, #555)", whiteSpace: "nowrap", userSelect: "none" },
       dlBadgeBusy: { color: "var(--dsw-alias-interactive-accent, #2563eb)", borderColor: "var(--dsw-alias-interactive-accent, #2563eb)" },
@@ -108,6 +109,7 @@ window.__ModuleLoader__.load({
       downloadFail: "下载失败：",
       downloadTooLarge: "文件超过下载上限（64MB）",
       downloadHostStale: "查看器宿主未包含下载端点，请重启 dsh web 后再试",
+      mtime: "修改时间",
     };
     var en = {
       view: "Files",
@@ -128,6 +130,7 @@ window.__ModuleLoader__.load({
       downloadFail: "Download failed: ",
       downloadTooLarge: "File exceeds the 64MB download cap",
       downloadHostStale: "Viewer host lacks the download endpoint; restart dsh web and retry",
+      mtime: "Modified",
     };
 
     function callChannel(rpc, endpoint, payload) {
@@ -186,6 +189,15 @@ window.__ModuleLoader__.load({
       if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
       if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + " MB";
       return (n / 1024 / 1024 / 1024).toFixed(2) + " GB";
+    }
+
+    // 修改时间 → "YYYY-MM-DD HH:mm"（本地时区，tabular-nums 对齐）。
+    function formatTime(ms) {
+      var n = Number(ms);
+      if (ms === undefined || ms === null || !Number.isFinite(n) || n <= 0) return "";
+      var d = new Date(n);
+      var p = function (x) { return (x < 10 ? "0" : "") + x; };
+      return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
     }
 
     // 增强版 Markdown 渲染（标题 1-6 / 围栏代码 / 列表 / 引用 / 分隔线 / 表格 / 行内样式）。
@@ -412,6 +424,7 @@ window.__ModuleLoader__.load({
                 onKeyDown: function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(e.path); } }
               },
                 h("span", { style: S.entryName }, icon + e.name),
+                e.mtime !== undefined ? h("span", { style: S.entryTime, title: t("mtime") }, formatTime(e.mtime)) : null,
                 e.kind === "file" && e.size !== undefined ? h("span", { style: S.entrySize }, formatSize(e.size)) : null,
                 e.kind === "file" ? downloadBadge({ path: e.path, name: e.name, size: e.size, dl: dl, onDownload: onDownload, t: t }) : null
               );
