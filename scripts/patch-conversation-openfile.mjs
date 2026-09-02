@@ -66,7 +66,42 @@ function findTarget(explicit) {
   return undefined;
 }
 
+// alpha.2 形态：openFile 变为 async + ctx.remote.session.openWorkspacePath。
+// 命中时打最小补丁：openFile 优先调用本插件暴露的 window.__dshFileViewerOpen，
+// 把内容路由进浏览器内查看器；钩子缺失时保持官方行为不变。
+const ALPHA2_ORIGINAL = `							openFile: async (path) => {
+								const cwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd;
+								const result = await ctx.remote.session.openWorkspacePath({ path: resolveWorkspacePath(cwd, path) });
+								if (!result.ok) throw new Error(\`path open failed: \${result.error.message}\`);
+							},`;
+const ALPHA2_PATCHED = `							openFile: async (path) => {
+								const cwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd;
+								const resolved = resolveWorkspacePath(cwd, path);
+								if (typeof window !== "undefined" && typeof window.__dshFileViewerOpen === "function") {
+									window.__dshFileViewerOpen(resolved, sessionId);
+									return;
+								}
+								const result = await ctx.remote.session.openWorkspacePath({ path: resolved });
+								if (!result.ok) throw new Error(\`path open failed: \${result.error.message}\`);
+							},`;
+
+const alpha2Target = findTarget(process.argv[2]);
+if (alpha2Target) {
+  const alpha2Src = readFileSync(alpha2Target, 'utf8');
+  if (alpha2Src.includes(ALPHA2_ORIGINAL) && !alpha2Src.includes('window.__dshFileViewerOpen(resolved, sessionId)')) {
+    copyFileSync(alpha2Target, `${alpha2Target}.bak-dsh-file-viewer-alpha2`);
+    writeFileSync(alpha2Target, alpha2Src.replace(ALPHA2_ORIGINAL, ALPHA2_PATCHED));
+    console.log(`已补丁 openFile(alpha.2 形态) → 文件标签页：${alpha2Target}`);
+    process.exit(0);
+  }
+  if (alpha2Src.includes('window.__dshFileViewerOpen(resolved, sessionId)')) {
+    console.log(`已打过最新补丁，跳过：${alpha2Target}`);
+    process.exit(0);
+  }
+}
+
 const target = findTarget(process.argv[2]);
+
 if (!target) {
   console.error('未找到 dsh-client-ui-conversation/lib/client.js。可用参数指定 dsh 安装根目录。');
   process.exit(1);

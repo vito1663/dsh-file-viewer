@@ -20,7 +20,6 @@ With this plugin: open dsh in your own browser, click the **Files** tab, type a 
 
 - **Browse directories**: enter a directory path (e.g. `/srv/share`) and get an instant list of subdirectories and files; click a subdirectory to enter it, click a file to open it. Supports "up one level" and breadcrumb jumps.
 - **Open files**: enter a file path and the plugin auto-detects the type and renders it. Formats it understands:
-
 | Format | Rendering |
 |---|---|
 | Markdown | headings / lists / tables / quotes / code blocks / inline styles |
@@ -34,6 +33,8 @@ With this plugin: open dsh in your own browser, click the **Files** tab, type a 
 | Any text / code / log | monospace display |
 
 > Detection uses file content "magic bytes" first — a fake extension won't fool it.
+
+- **Download files**: every file row in the directory list ends with a small **⬇** badge (and the file view has a **⬇ Download** button). Clicking the file title/row opens the preview as before; clicking the **⬇** badge downloads the original file to your device, with live progress and the original filename. Files are pulled in 512 KB chunks (safe behind gateways/CDNs) and never converted — a `.docx` downloads as the real `.docx`. Cap: **64 MB** per file.
 
 - **Conversation integration**: click a produced-file chip or a file path in the conversation to jump straight to the Files tab (needs a small compatibility patch on headless servers — see below).
 
@@ -65,14 +66,15 @@ Finally restart dsh web (`sudo systemctl restart dsh-web` if managed by systemd)
 3. Enter an absolute server path and press Enter or click Open:
    - a **directory** → its contents are listed; click your way down;
    - a **file** → auto-rendered.
+4. **Download**: click the **⬇** badge at the end of a file row (or the **⬇ Download** button in the file view) to save the file to your device. Clicking the file title/row itself still opens the preview.
 
 The first time you open the Files tab it defaults to the current workspace directory; files you viewed are remembered, so switching back shows them again.
 
 ## Security
 
 - **Read-only**: it never writes files and never executes anything.
-- **Size limits**: regular files ≤ 6 MB, Word ≤ 30 MB.
-- **Sensitive paths rejected**: `/etc`, `/proc`, `.ssh`, `.git`, `settings.yaml`, `.env`, `.npmrc`, etc. are not viewable and are hidden from directory listings.
+- **Size limits**: files are streamed in 512 KB chunks; **64 MB** per file for both preview and download.
+- **Sensitive paths rejected**: `/etc`, `/proc`, `.ssh`, `.git`, `settings.yaml`, `.env`, `.npmrc`, etc. are not viewable, not downloadable, and are hidden from directory listings.
 - **Important**: the plugin channel only guards against DNS rebinding — it is **not** login authentication. Make sure your dsh deployment has its own auth (access password / reverse-proxy auth) before exposing it to the internet.
 
 ## Compatibility patch for headless servers (recommended)

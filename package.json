@@ -1,7 +1,7 @@
 {
   "name": "dsh-file-viewer",
-  "version": "0.2.0",
-  "description": "Server file browser + viewer for dsh web: enter a file path to auto-render it (HTML/PDF/Word/Markdown/images/JSON/CSV/text), or a directory path to browse and navigate its contents. Content is read from the server, viewable from any device.",
+  "version": "0.3.0",
+  "description": "Server file browser + viewer for dsh web: enter a file path to auto-render it (HTML/PDF/Word/Markdown/images/JSON/CSV/text), or a directory path to browse and navigate its contents. Files can also be downloaded to your device. Content is read from the server, viewable from any device.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -60,5 +60,10 @@
       ],
       "platform": "web"
     }
+  },
+  "devDependencies": {
+    "jsdom": "29.1.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   }
 }

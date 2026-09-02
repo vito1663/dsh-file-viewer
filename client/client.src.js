@@ -12,6 +12,10 @@
 // 目录浏览：viewer.list 端点 —— 输入目录 → 面包屑 + 子目录/文件列表；
 // 点子目录进入，点文件加载渲染，支持「上一级」与面包屑跳转；文件视图带「所在目录」返回。
 //
+// 下载（v7.5）：文件列表每行尾部有「⬇」下载徽章，文件视图 meta 栏有「⬇ 下载」按钮；
+// 点标题/行 = 打开预览（原行为不变），点徽章/按钮 = 通过 viewer.download 分块拉原始字节
+//（512KB/块，≤64MB）存为 Blob 后触发浏览器保存，带进度与失败提示。
+//
 // 注意：客户端产物是 __ModuleLoader__ 经典脚本，只能用 require，无 JSX/TS/import。
 
 window.__ModuleLoader__.load({
@@ -27,9 +31,11 @@ window.__ModuleLoader__.load({
 
     var CHANNEL = "/dsh-file-viewer";
     var NS = "dsh-file-viewer";
-    var TIMEOUT_MS = 25000;
+    var TIMEOUT_MS = 120000;
+    // 下载上限：与宿主 viewer.download 的 64MB 上限一致（预览 range 同上限）。
+    var DOWNLOAD_CAP = 64 * 1024 * 1024;
 
-    var ENDPOINTS = { load: "viewer.load", list: "viewer.list" };
+    var ENDPOINTS = { load: "viewer.load", list: "viewer.list", range: "viewer.range", download: "viewer.download" };
 
     // 全内联样式：不依赖宿主 CSS，规避 slot 注入环境里的样式隔离/覆盖。
     var S = {
@@ -54,6 +60,7 @@ window.__ModuleLoader__.load({
       td: { border: "1px solid var(--dsw-alias-border-l2, #ddd)", padding: "6px 10px", textAlign: "left" },
       // v7.4: 目录浏览器样式
       dirRoot: { flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 8 },
+
       dirPath: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, fontSize: 13, padding: "8px 10px", background: "rgba(0,0,0,.03)", borderRadius: 8, flex: "none" },
       crumb: { cursor: "pointer", padding: "2px 4px", borderRadius: 4, color: "var(--dsw-alias-label-primary, #222)", fontWeight: 500 },
       crumbSep: { color: "var(--dsw-alias-label-tertiary, #888)" },
@@ -62,6 +69,10 @@ window.__ModuleLoader__.load({
       entryRow: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "7px 10px", borderRadius: 6, fontSize: 13.5, color: "var(--dsw-alias-label-primary, #222)" },
       entryName: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
       entrySize: { fontSize: 12, color: "var(--dsw-alias-label-tertiary, #888)", flex: "none" },
+      // v7.5: 下载徽章（列表行尾 + 文件视图 meta 栏共用）
+      dlBadge: { flex: "none", cursor: "pointer", fontSize: 12, lineHeight: 1, padding: "4px 9px", borderRadius: 10, border: "1px solid var(--dsw-alias-border-l2, #ddd)", background: "transparent", color: "var(--dsw-alias-label-secondary, #555)", whiteSpace: "nowrap", userSelect: "none" },
+      dlBadgeBusy: { color: "var(--dsw-alias-interactive-accent, #2563eb)", borderColor: "var(--dsw-alias-interactive-accent, #2563eb)" },
+      dlBadgeDim: { opacity: 0.45 },
       dirMeta: { fontSize: 12, color: "var(--dsw-alias-label-tertiary, #888)", flex: "none" },
       tailList: { display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", padding: "6px 0", fontSize: 12.5 },
       tailLabel: { color: "var(--dsw-alias-label-tertiary, #888)", marginRight: 2 },
@@ -93,6 +104,10 @@ window.__ModuleLoader__.load({
       binary: "二进制文件，无法预览",
       auto: "已自动识别并渲染：",
       produced: "产物：",
+      download: "下载",
+      downloadFail: "下载失败：",
+      downloadTooLarge: "文件超过下载上限（64MB）",
+      downloadHostStale: "查看器宿主未包含下载端点，请重启 dsh web 后再试",
     };
     var en = {
       view: "Files",
@@ -109,6 +124,10 @@ window.__ModuleLoader__.load({
       binary: "Binary file, cannot preview",
       auto: "Auto-detected & rendered: ",
       produced: "Produced: ",
+      download: "Download",
+      downloadFail: "Download failed: ",
+      downloadTooLarge: "File exceeds the 64MB download cap",
+      downloadHostStale: "Viewer host lacks the download endpoint; restart dsh web and retry",
     };
 
     function callChannel(rpc, endpoint, payload) {
@@ -328,8 +347,38 @@ window.__ModuleLoader__.load({
       return h("pre", { style: S.pre }, file.text);
     }
 
-    // v7.4: 目录浏览器（面包屑 + 子目录/文件列表）。
-    function renderDirBrowser(dir, open, t) {
+    // v7.5: 下载徽章（文件列表行尾 / 文件视图 meta 栏共用）。
+    // 点击/回车只触发下载（stopPropagation），行与标题的「打开预览」行为不受影响。
+    // 超过 DOWNLOAD_CAP 的文件徽章置灰，点击后由 downloadFile 给出明确错误提示。
+    function downloadBadge(opts) {
+      var path = opts.path;
+      var name = opts.name;
+      var size = opts.size;
+      var dl = opts.dl;
+      var onDownload = opts.onDownload;
+      var t = opts.t;
+      var withLabel = opts.withLabel === true;
+      var active = dl !== undefined && dl.path === path;
+      var tooLarge = typeof size === "number" && size > DOWNLOAD_CAP;
+      var style = Object.assign({}, S.dlBadge,
+        active ? S.dlBadgeBusy : undefined,
+        tooLarge && !active ? S.dlBadgeDim : undefined);
+      var text = withLabel ? "⬇ " + t("download") : "⬇";
+      if (active) text = dl.total > 0 ? "⬇ " + Math.min(100, Math.round((dl.received / dl.total) * 100)) + "%" : "⬇ …";
+      var fire = function (ev) {
+        if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+        onDownload(path, name, size);
+      };
+      return h("span", {
+        role: "button", tabIndex: 0, style: style,
+        title: (tooLarge ? t("downloadTooLarge") + " · " : t("download") + " ") + name,
+        onClick: fire,
+        onKeyDown: function (ev) { if (ev.key === "Enter" || ev.key === " ") fire(ev); }
+      }, text);
+    }
+
+    // v7.4: 目录浏览器（面包屑 + 子目录/文件列表；文件行尾带下载徽章）。
+    function renderDirBrowser(dir, open, t, dl, onDownload) {
       var segs = String(dir.path).split("/").filter(Boolean);
       var parentPath = dir.path === "/" ? null : (String(dir.path).slice(0, String(dir.path).lastIndexOf("/")) || "/");
       var dirCount = 0, fileCount = 0;
@@ -363,7 +412,8 @@ window.__ModuleLoader__.load({
                 onKeyDown: function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(e.path); } }
               },
                 h("span", { style: S.entryName }, icon + e.name),
-                e.kind === "file" && e.size !== undefined ? h("span", { style: S.entrySize }, formatSize(e.size)) : null
+                e.kind === "file" && e.size !== undefined ? h("span", { style: S.entrySize }, formatSize(e.size)) : null,
+                e.kind === "file" ? downloadBadge({ path: e.path, name: e.name, size: e.size, dl: dl, onDownload: onDownload, t: t }) : null
               );
             })
           )
@@ -428,24 +478,231 @@ window.__ModuleLoader__.load({
       var error = errState[0], setError = errState[1];
       var busyState = useState(false);
       var busy = busyState[0], setBusy = busyState[1];
+      // 下载状态：{ path, received, total } —— 徽章显示进度；undefined = 空闲。
+      var dlState = useState(undefined);
+      var dl = dlState[0], setDl = dlState[1];
+      // 下载序号：新下载会让旧下载链在各块返回后静默退出（防两个下载互相覆盖进度）。
+      var dlSeqRef = React.useRef(0);
       var inputRef = React.useRef(null);
       // 请求序号：快速连续打开时丢弃过期响应（防慢响应覆盖新结果）。
       var reqIdRef = React.useRef(0);
       // 挂载首帧标记：首帧由 mount effect 决定展示内容，后续 store 变更才走 deps effect。
+      var pendingOpenRef = React.useRef(null);
       var mountedRef = React.useRef(false);
 
-      function loadFile(absPath, myId) {
-        setFile(undefined); setDir(undefined);
-        return props.rpcCall(ENDPOINTS.load, { path: absPath }).then(function (result) {
-          if (myId !== undefined && reqIdRef.current !== myId) return;
-          if (!result.ok) { setError(t("failed") + result.error.message); return; }
-          setFile(result.value);
-          // 记录本会话上次查看的文件
-          props.store.remember(sessionId, absPath);
+      // 分块拉取：每条 WS 消息 ≤ ~700KB（512KB 原始字节 ≈ 683KB base64），
+      // 避免超大帧在 Cloudflare/网关/移动网络下丢失导致 25s 请求超时。
+      var CHUNK_BYTES = 512 * 1024;
+      function loadFileChunked(absPath, myId) {
+        var payload0 = { path: absPath, start: 0, length: CHUNK_BYTES };
+        return props.rpcCall(ENDPOINTS.range, payload0).then(function (first) {
+          if (!first.ok) { setError(t("failed") + first.error.message); return; }
+          var v0 = first.value;
+          var kind = v0.kind;
+          var mime = v0.mime || "text/plain";
+          var name = v0.name || absPath.slice(absPath.lastIndexOf("/") + 1) || absPath;
+          var total = Number(v0.total) || 0;
+          // 首块已含全部 → base64 一次解码
+          // 每块独立 atob 解码为字节（各块 base64 自带 padding，不能先 join 后解码）。
+          var b64ToBytes = function (b64) {
+            var bin = atob(b64);
+            var out = new Uint8Array(bin.length);
+            for (var i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+            return out;
+          };
+          var parts = [b64ToBytes(v0.chunk)];
+          // 下一块偏移：用服务端回报的 offset + 实际字节数，不用 base64 长度估算（避免偏移错位）。
+          var bytesOf = function (b64) { var pad = b64.length >= 2 && b64[b64.length - 1] === "=" ? (b64[b64.length - 2] === "=" ? 2 : 1) : 0; return b64.length * 3 / 4 - pad; };
+          var nextStart = (Number(v0.offset) || 0) + bytesOf(v0.chunk);
+          // 递归串行拉块：每块拿到响应后再发下一块（避免同步循环预调度造成重复请求）。
+          var pull = function (start) {
+            if (start >= total) return Promise.resolve();
+            return props.rpcCall(ENDPOINTS.range, { path: absPath, start: start, length: CHUNK_BYTES }).then(function (r) {
+              // 拉块中途不因 reqId 变化而中断（避免链被新 open 打断后前半段无声死）；
+              // 最终 setFile 前再检查 reqId，只有最后一次 open 能上屏。
+              if (!r.ok) { setError(t("failed") + r.error.message); return; }
+              parts.push(b64ToBytes(r.value.chunk));
+              if (r.value.done) return Promise.resolve();
+              var adv = (Number(r.value.offset) || start) + bytesOf(r.value.chunk);
+              if (adv <= start) return Promise.resolve(); // 防卡死：偏移不前进就停
+              return pull(adv);
+            });
+          };
+          var chain = pull(nextStart);
+          return chain.then(function () {
+            if (reqIdRef.current !== myId) return;
+            // 合并各块字节为单一 Uint8Array
+            var grand = 0;
+            for (var gi = 0; gi < parts.length; gi += 1) grand += parts[gi].length;
+            var bytes = new Uint8Array(grand);
+            var off = 0;
+            for (var pi = 0; pi < parts.length; pi += 1) { bytes.set(parts[pi], off); off += parts[pi].length; }
+            var textual = kind === "text" || kind === "markdown" || kind === "json"
+              || kind === "csv" || kind === "code" || kind === "html" || kind === "svg";
+            var value = { kind: kind, mime: mime, name: name, size: total, path: v0.path || absPath };
+            if (kind === "image" || kind === "pdf") {
+              value.dataUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
+            } else if (textual) {
+              var text = new TextDecoder("utf-8").decode(bytes);
+              if (kind === "text" && text.indexOf("\u0000") !== -1) { value.kind = "binary"; }
+              else { value.text = text; }
+              if (value.kind === "binary") { value.text = undefined; }
+            } else {
+              value.text = new TextDecoder("utf-8").decode(bytes);
+            }
+            setFile(value);
+            props.store.remember(sessionId, absPath);
+          }, function (e) {
+            if (myId !== undefined && reqIdRef.current !== myId) return;
+            setError(t("failed") + (e && e.message ? e.message : String(e)));
+          });
         }, function (e) {
           if (myId !== undefined && reqIdRef.current !== myId) return;
           setError(t("failed") + (e && e.message ? e.message : String(e)));
         });
+      }
+
+      function loadFile(absPath, myId) {
+        setFile(undefined); setDir(undefined);
+        // 大文件改走分块拉取（先发一个首块请求拿 total/kind；首块数据也复用，不浪费）
+        return props.rpcCall(ENDPOINTS.range, { path: absPath, start: 0, length: CHUNK_BYTES }).then(function (probe) {
+          if (!probe.ok) {
+            // 服务端无 range 端点（未重启）：回退单次 load。
+            return props.rpcCall(ENDPOINTS.load, { path: absPath }).then(function (result) {
+              if (myId !== undefined && reqIdRef.current !== myId) return;
+              if (!result.ok) { setError(t("failed") + result.error.message); return; }
+              setFile(result.value);
+              props.store.remember(sessionId, absPath);
+            }, function (e) {
+              if (myId !== undefined && reqIdRef.current !== myId) return;
+              setError(t("failed") + (e && e.message ? e.message : String(e)));
+            });
+          }
+          var total = Number(probe.value.total) || 0;
+          if (total > CHUNK_BYTES) {
+            // 丢弃首块（loadFileChunked 会重新拉首块；为简洁牺牲一次重复传输）
+            return loadFileChunked(absPath, myId);
+          }
+          if (total <= CHUNK_BYTES && probe.value.done) {
+            // 首块即全量：直接构造渲染值，免去第二次 load 请求
+            var v0 = probe.value;
+            var bin = atob(v0.chunk);
+            var bytes = new Uint8Array(bin.length);
+            for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            var textual = v0.kind === "text" || v0.kind === "markdown" || v0.kind === "json"
+              || v0.kind === "csv" || v0.kind === "code" || v0.kind === "html" || v0.kind === "svg";
+            var value = { kind: v0.kind, mime: v0.mime || "text/plain", name: v0.name, size: total, path: v0.path || absPath };
+            if (v0.kind === "image" || v0.kind === "pdf") {
+              value.dataUrl = "data:" + (v0.mime || "application/octet-stream") + ";base64," + v0.chunk;
+            } else if (textual) {
+              var text = new TextDecoder("utf-8").decode(bytes);
+              if (v0.kind === "text" && text.indexOf("\u0000") !== -1) { value.kind = "binary"; }
+              else { value.text = text; }
+            } else {
+              value.text = new TextDecoder("utf-8").decode(bytes);
+            }
+            setFile(value);
+            props.store.remember(sessionId, absPath);
+            return;
+          }
+          return props.rpcCall(ENDPOINTS.load, { path: absPath }).then(function (result) {
+            if (myId !== undefined && reqIdRef.current !== myId) return;
+            if (!result.ok) { setError(t("failed") + result.error.message); return; }
+            setFile(result.value);
+            // 记录本会话上次查看的文件
+            props.store.remember(sessionId, absPath);
+          }, function (e) {
+            if (myId !== undefined && reqIdRef.current !== myId) return;
+            setError(t("failed") + (e && e.message ? e.message : String(e)));
+          });
+        }, function (e) {
+          if (myId !== undefined && reqIdRef.current !== myId) return;
+          setError(t("failed") + (e && e.message ? e.message : String(e)));
+        });
+      }
+
+      // v7.5 下载：viewer.download 分块拉**原始字节** → Blob → <a download> 触发保存。
+      // 列表标题/行点击仍是打开预览；只有下载徽章走这里（徽章已 stopPropagation）。
+      // 进度经 dl state 回填到徽章（⬇ N%）；knownSize 超上限时直接给出提示不发请求。
+      function downloadFile(absPath, fallbackName, knownSize) {
+        if (!absPath) return;
+        if (typeof knownSize === "number" && knownSize > DOWNLOAD_CAP) {
+          setError(t("downloadTooLarge") + " · " + formatSize(knownSize));
+          return;
+        }
+        var mySeq = ++dlSeqRef.current;
+        var stale = function () { return dlSeqRef.current !== mySeq; };
+        var failDl = function (msg) {
+          if (stale()) return;
+          setDl(undefined);
+          setError(t("downloadFail") + msg);
+        };
+        setDl({ path: absPath, received: 0, total: 0 });
+        var b64ToBytes = function (b64) {
+          var bin = atob(b64);
+          var out = new Uint8Array(bin.length);
+          for (var i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+          return out;
+        };
+        var bytesOf = function (b64) { var pad = b64.length >= 2 && b64[b64.length - 1] === "=" ? (b64[b64.length - 2] === "=" ? 2 : 1) : 0; return b64.length * 3 / 4 - pad; };
+        var parts = [];
+        var received = 0;
+        var finish = function (mime, name, total) {
+          if (stale()) return;
+          setDl({ path: absPath, received: total, total: total });
+          try {
+            var blob = new Blob(parts, { type: mime || "application/octet-stream" });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement("a");
+            a.href = url;
+            a.download = name || fallbackName || absPath.slice(absPath.lastIndexOf("/") + 1) || absPath;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+          } catch (e) {
+            failDl(e && e.message ? e.message : String(e));
+            return;
+          }
+          setDl(undefined);
+        };
+        var pull = function (start, total) {
+          if (stale()) return;
+          props.rpcCall(ENDPOINTS.download, { path: absPath, start: start, length: CHUNK_BYTES }).then(function (r) {
+            if (stale()) return;
+            if (!r.ok) { failDl(r.error && r.error.message ? r.error.message : String(r.error)); return; }
+            var v = r.value;
+            var tot = Number(v.total) || total;
+            if (v.chunk) {
+              parts.push(b64ToBytes(v.chunk));
+              received += bytesOf(v.chunk);
+              setDl({ path: absPath, received: received, total: tot });
+            }
+            if (v.done) { finish(v.mime, v.name, tot); return; }
+            var adv = (Number(v.offset) || start) + (v.chunk ? bytesOf(v.chunk) : 0);
+            if (adv <= start) { failDl("下载停滞（偏移未前进），已中止"); return; }
+            pull(adv, tot);
+          }, function (e) { failDl(e && e.message ? e.message : String(e)); });
+        };
+        props.rpcCall(ENDPOINTS.download, { path: absPath, start: 0, length: CHUNK_BYTES }).then(function (first) {
+          if (stale()) return;
+          if (!first.ok) {
+            var msg = first.error && first.error.message ? first.error.message : String(first.error);
+            // 旧宿主（未重启）没有 download 端点：给出可操作的提示
+            if (/未知端点/.test(msg)) { failDl(t("downloadHostStale")); return; }
+            failDl(msg);
+            return;
+          }
+          var v0 = first.value;
+          var total = Number(v0.total) || 0;
+          if (v0.chunk) {
+            parts.push(b64ToBytes(v0.chunk));
+            received += bytesOf(v0.chunk);
+            setDl({ path: absPath, received: received, total: total });
+          }
+          if (v0.done) { finish(v0.mime, v0.name, total); return; }
+          pull((Number(v0.offset) || 0) + (v0.chunk ? bytesOf(v0.chunk) : 0), total);
+        }, function (e) { failDl(e && e.message ? e.message : String(e)); });
       }
 
       // 统一打开：viewer.list 判断目录/文件。
@@ -486,6 +743,10 @@ window.__ModuleLoader__.load({
       // 跳过挂载首帧：首帧展示内容统一由 mount effect 决定（记忆 > 待打开 > 工作区）。
       useEffect(function () {
         if (!mountedRef.current) return;
+        // 挂载首帧已由 mount effect 处理 pendingOpen，这里只响应【后续】新的点击：
+        // 用一个已消费标记避免首帧重复 open（防双链拉块）。
+        if (pendingOpenRef.current === initialPath + "\u0000" + (snapshot.session || "")) return;
+        pendingOpenRef.current = initialPath + "\u0000" + (snapshot.session || "");
         if (pendingOpen && initialPath && (snapshot.session === undefined || snapshot.session === sessionId)) {
           open(initialPath);
         }
@@ -499,12 +760,13 @@ window.__ModuleLoader__.load({
         if (mountedRef.current) return;
         mountedRef.current = true;
         var last = props.store.lastOf(sessionId);
-        if (typeof last === "string" && last.length > 0) {
-          setPath(last);
-          open(last);
-        } else if (pendingOpen && initialPath && (snapshot.session === undefined || snapshot.session === sessionId)) {
+        // 用户刚点的文件（pendingOpen）优先于历史记忆（lastOf），避免双 open 竞争：
+        if (pendingOpen && initialPath && (snapshot.session === undefined || snapshot.session === sessionId)) {
           setPath(initialPath);
           open(initialPath);
+        } else if (typeof last === "string" && last.length > 0) {
+          setPath(last);
+          open(last);
         } else if (typeof sessionCwd === "string" && sessionCwd.length > 0) {
           setPath(sessionCwd);
           open(sessionCwd);
@@ -532,7 +794,7 @@ window.__ModuleLoader__.load({
         h("div", { style: S.body },
           error !== undefined ? h("p", { style: S.error }, error) : null,
           dir !== undefined
-            ? renderDirBrowser(dir, open, t)
+            ? renderDirBrowser(dir, open, t, dl, function (p, n, s) { downloadFile(p, n, s); })
             : (file !== undefined
               ? h("div", { style: S.fileWrap },
                 h("div", { style: S.meta },
@@ -542,6 +804,9 @@ window.__ModuleLoader__.load({
                         onClick: function () { open(fileParent); },
                         onKeyDown: function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(fileParent); } } },
                       "⬅ " + t("parentDir"))
+                    : null,
+                  file.path !== undefined
+                    ? downloadBadge({ path: file.path, name: file.name, size: file.size, dl: dl, onDownload: downloadFile, t: t, withLabel: true })
                     : null
                 ),
                 h("div", { style: S.renderArea }, renderBody(file, t)))
@@ -598,6 +863,33 @@ window.__ModuleLoader__.load({
       if (typeof window !== "undefined") {
         window.__dshFileViewerOpen = function (path, session) {
           viewerStore.open(typeof path === "string" ? path : "", undefined, typeof session === "string" ? session : undefined);
+          // 无头服务器：官方 openFile 被路由到这里后，还需要把 conversation.view
+          // 切到本插件标签页内容才可见。alpha.2 的 openFile 注入点拿不到
+          // conversation store 的 setView，这里退而点击标签栏上的「文件」按钮
+          // （role=tab，文案与本地化 label 一致），等效于用户手动点标签。
+          var labels = {};
+          labels[__t("view")] = true;
+          labels["\u6587\u4ef6"] = true;
+          labels["Files"] = true;
+          var tries = 0;
+          var timer = setInterval(function () {
+            tries += 1;
+            var tabs = document.querySelectorAll("[role=\"tab\"]");
+            for (var i = 0; i < tabs.length; i += 1) {
+              var btn = tabs[i];
+              var text = (btn.textContent || "").trim();
+              if (labels[text] && btn.getAttribute("aria-selected") !== "true") {
+                clearInterval(timer);
+                btn.click();
+                return;
+              }
+              if (labels[text] && btn.getAttribute("aria-selected") === "true") {
+                clearInterval(timer);
+                return;
+              }
+            }
+            if (tries >= 200) clearInterval(timer);
+          }, 150);
         };
       }
     }
